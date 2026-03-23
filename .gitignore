@@ -1,0 +1,17 @@
+config.json
+*.log
+__pycache__/
+*.pyc
+*.pyo
+.env
+node_modules/
+frontend/dist/
+trump_trades.json
+trump_seen_posts.json
+trump_bot_state.json
+.DS_Store
+.vscode/
+*.egg-info/
+dist/
+build/
+.pytest_cache/

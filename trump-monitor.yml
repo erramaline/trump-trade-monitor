@@ -1,0 +1,104 @@
+name: Trump Signal Monitor
+
+on:
+  # Run continuously — restarts every 5 hours to avoid GitHub's 6h job limit
+  schedule:
+    - cron: "0 */5 * * *"   # Every 5 hours, 24/7, 7 days a week
+
+  workflow_dispatch:
+    inputs:
+      force_run:
+        description: "Force run now (for testing)"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trump-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    name: Trump Truth Social Monitor
+    runs-on: ubuntu-latest
+    timeout-minutes: 290   # ~4h50 — safely under GitHub's 6h limit
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install feedparser anthropic
+
+      - name: Build runtime config from secrets
+        env:
+          ALPACA_API_KEY:       ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_API_SECRET:    ${{ secrets.ALPACA_API_SECRET }}
+          ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN:   ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:     ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python - << 'PY'
+          import json, os
+          from pathlib import Path
+
+          cfg = {}
+          if Path("config.json").exists():
+              try:
+                  cfg = json.loads(Path("config.json").read_text())
+              except Exception:
+                  cfg = {}
+
+          if os.environ.get("ALPACA_API_KEY"):
+              cfg["alpaca_api_key"]    = os.environ["ALPACA_API_KEY"]
+          if os.environ.get("ALPACA_API_SECRET"):
+              cfg["alpaca_api_secret"] = os.environ["ALPACA_API_SECRET"]
+          if os.environ.get("ANTHROPIC_API_KEY"):
+              cfg["anthropic_api_key"] = os.environ["ANTHROPIC_API_KEY"]
+
+          Path("config.json").write_text(json.dumps(cfg, indent=2))
+          print(f"Config written. Keys: {list(cfg.keys())}")
+          PY
+
+      - name: Run Trump monitor (up to 4h 45min)
+        env:
+          ALPACA_API_KEY:     ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_API_SECRET:  ${{ secrets.ALPACA_API_SECRET }}
+          ANTHROPIC_API_KEY:  ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          MIN_IMPACT_SCORE:   "70"
+          CI_MODE:            "true"
+        run: |
+          # Run for max 4h45m then let GitHub restart via cron
+          timeout 17100 python trump_monitor.py || true
+
+      - name: Save artifacts
+        if: always()
+        run: |
+          mkdir -p artifacts
+          for f in trump_bot.log trump_trades.json trump_seen_posts.json; do
+            [ -f "$f" ] && cp "$f" artifacts/ || true
+          done
+          echo "Bot completed at $(date)" > artifacts/run_info.txt
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trump-monitor-${{ github.run_number }}
+          path: artifacts/
+          retention-days: 7
+          if-no-files-found: ignore
