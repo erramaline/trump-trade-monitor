@@ -73,11 +73,12 @@ async def _broadcast(event: dict) -> None:
 #  GEMINI AI ANALYZER  (primary — replaces Claude)
 # ═══════════════════════════════════════════════════════
 
-_GEMINI_MODEL = "gemini-1.5-flash"
-_GEMINI_ENDPOINT = (
-    "https://generativelanguage.googleapis.com/v1beta/models/"
-    f"{_GEMINI_MODEL}:generateContent"
-)
+_GEMINI_MODELS = [
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-1.5-flash-latest",
+    "gemini-1.5-flash",
+]
 
 # Shared prompt template (same JSON schema as the original Claude prompt)
 _ANALYSIS_PROMPT_TEMPLATE = """You are a professional financial analyst specializing in political risk and market impact analysis.
@@ -134,7 +135,7 @@ def analyze_with_gemini(post: dict) -> dict | None:
     Analyze a post using Google Gemini (gemini-1.5-flash).
     Returns parsed analysis dict or None on failure.
     """
-    api_key = os.environ.get("GIMINI_API_KEY", "")
+    api_key = os.environ.get("GEMINI_API_KEY", "") or os.environ.get("GIMINI_API_KEY", "")
     if not api_key:
         try:
             cfg = json.loads(Path("config.json").read_text())
@@ -146,30 +147,37 @@ def analyze_with_gemini(post: dict) -> dict | None:
         return None
 
     prompt = _build_prompt(post)
-    try:
-        resp = _requests.post(
-            _GEMINI_ENDPOINT,
-            params={"key": api_key},
-            json={
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {
-                    "responseMimeType": "application/json",
-                    "temperature": 0.1,
-                    "maxOutputTokens": 600,
+    for model in _GEMINI_MODELS:
+        try:
+            endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+            resp = _requests.post(
+                endpoint,
+                params={"key": api_key},
+                json={
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {
+                        "responseMimeType": "application/json",
+                        "temperature": 0.1,
+                        "maxOutputTokens": 600,
+                    },
                 },
-            },
-            timeout=20,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        raw_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-        return _parse_analysis_json(raw_text, post, "gemini")
-    except json.JSONDecodeError as e:
-        log.warning(f"Gemini returned invalid JSON: {e}")
-        return None
-    except Exception as e:
-        log.error(f"Gemini API error: {e}")
-        return None
+                timeout=20,
+            )
+            if resp.status_code == 404:
+                log.warning(f"Gemini model not found: {model} — trying next model")
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            raw_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            return _parse_analysis_json(raw_text, post, f"gemini:{model}")
+        except json.JSONDecodeError as e:
+            log.warning(f"Gemini returned invalid JSON for {model}: {e}")
+            continue
+        except Exception as e:
+            log.error(f"Gemini API error with model {model}: {e}")
+            continue
+
+    return None
 
 
 def _patched_analyze_post_with_claude(post: dict) -> dict:

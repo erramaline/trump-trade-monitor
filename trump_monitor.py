@@ -342,36 +342,53 @@ Scoring guidelines:
 - 30-49: Weak signal (political comment with possible indirect impact)
 - 0-29: No market impact (personal comment, media attacks, personal news)"""
 
-    try:
-        resp = requests.post(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
-            params={"key": api_key},
-            json={
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {
-                    "responseMimeType": "application/json",
-                    "temperature": 0.1,
-                    "maxOutputTokens": 600,
-                },
-            },
-            timeout=20,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        raw_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-        raw_text = re.sub(r"```json\s*|\s*```", "", raw_text).strip()
+    candidate_models = [
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
+        "gemini-1.5-flash-latest",
+        "gemini-1.5-flash",
+    ]
 
-        analysis = json.loads(raw_text)
-        analysis["analyzed_by"] = "gemini"
-        analysis["post_id"] = post["id"]
-        analysis["post_content"] = post["content"][:200]
-        return analysis
-    except json.JSONDecodeError as e:
-        log.warning(f"Gemini returned invalid JSON: {e} — falling back")
-        return None
-    except Exception as e:
-        log.error(f"Gemini API error: {e}")
-        return None
+    for model in candidate_models:
+        try:
+            endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+            resp = requests.post(
+                endpoint,
+                params={"key": api_key},
+                json={
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {
+                        "responseMimeType": "application/json",
+                        "temperature": 0.1,
+                        "maxOutputTokens": 600,
+                    },
+                },
+                timeout=20,
+            )
+
+            # Some keys/models return 404 for unknown model name.
+            if resp.status_code == 404:
+                log.warning(f"Gemini model not found: {model} — trying next model")
+                continue
+
+            resp.raise_for_status()
+            data = resp.json()
+            raw_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            raw_text = re.sub(r"```json\s*|\s*```", "", raw_text).strip()
+
+            analysis = json.loads(raw_text)
+            analysis["analyzed_by"] = f"gemini:{model}"
+            analysis["post_id"] = post["id"]
+            analysis["post_content"] = post["content"][:200]
+            return analysis
+        except json.JSONDecodeError as e:
+            log.warning(f"Gemini returned invalid JSON for {model}: {e} — trying next model")
+            continue
+        except Exception as e:
+            log.error(f"Gemini API error with model {model}: {e}")
+            continue
+
+    return None
 
 def analyze_post_with_claude(post: dict) -> dict:
     """
