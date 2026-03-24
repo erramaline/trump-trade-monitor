@@ -74,8 +74,8 @@ async def _broadcast(event: dict) -> None:
 # ═══════════════════════════════════════════════════════
 
 _GEMINI_MODELS = [
-    "gemini-2.0-flash",
     "gemini-2.0-flash-lite",
+    "gemini-2.0-flash",
     "gemini-1.5-flash-latest",
     "gemini-1.5-flash",
 ]
@@ -166,6 +166,9 @@ def analyze_with_gemini(post: dict) -> dict | None:
             if resp.status_code == 404:
                 log.warning(f"Gemini model not found: {model} — trying next model")
                 continue
+            if resp.status_code == 429:
+                log.warning(f"Gemini API throttled (429) for model {model} — immediate fallback to keyword analysis")
+                return None
             resp.raise_for_status()
             data = resp.json()
             raw_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
@@ -175,6 +178,13 @@ def analyze_with_gemini(post: dict) -> dict | None:
             continue
         except Exception as e:
             log.error(f"Gemini API error with model {model}: {e}")
+            # Fallback immediately if 429 in error
+            if hasattr(e, "response") and getattr(e.response, "status_code", None) == 429:
+                log.warning(f"Gemini API throttled (429) for model {model} — immediate fallback to keyword analysis")
+                return None
+            if "429" in str(e):
+                log.warning(f"Gemini API throttled (429) for model {model} — immediate fallback to keyword analysis")
+                return None
             continue
 
     return None

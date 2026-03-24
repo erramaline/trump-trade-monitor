@@ -343,13 +343,24 @@ Scoring guidelines:
 - 0-29: No market impact (personal comment, media attacks, personal news)"""
 
     candidate_models = [
-        "gemini-2.0-flash",
         "gemini-2.0-flash-lite",
+        "gemini-2.0-flash",
         "gemini-1.5-flash-latest",
         "gemini-1.5-flash",
     ]
 
+    last_call_time = getattr(analyze_post_with_gemini, "_last_call_time", None)
+    import time as _time
+
     for model in candidate_models:
+        # Rate limit: 1 call per 12 seconds
+        now = _time.monotonic()
+        if last_call_time is not None:
+            elapsed = now - last_call_time
+            if elapsed < 12:
+                sleep_time = 12 - elapsed
+                log.info(f"Rate limiting Gemini API: sleeping {sleep_time:.1f}s before next call")
+                _time.sleep(sleep_time)
         try:
             endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
             resp = requests.post(
@@ -365,6 +376,7 @@ Scoring guidelines:
                 },
                 timeout=20,
             )
+            analyze_post_with_gemini._last_call_time = _time.monotonic()
 
             # Some keys/models return 404 for unknown model name.
             if resp.status_code == 404:
@@ -386,6 +398,13 @@ Scoring guidelines:
             continue
         except Exception as e:
             log.error(f"Gemini API error with model {model}: {e}")
+            # If 429 error, break immediately (let fallback handle)
+            if hasattr(e, "response") and getattr(e.response, "status_code", None) == 429:
+                log.warning("Gemini API throttled (429) — breaking to fallback")
+                break
+            if "429" in str(e):
+                log.warning("Gemini API throttled (429) — breaking to fallback")
+                break
             continue
 
     return None
@@ -402,7 +421,15 @@ def analyze_post_with_claude(post: dict) -> dict:
     api_key = get_anthropic_api_key()
 
     if not api_key:
-        log.warning("No Gemini or ANTHROPIC_API_KEY — using keyword fallback analysis")
+        # Si pas de clé Anthropic, attendre le reset Gemini (attente 60s)
+        log.warning("No Gemini or ANTHROPIC_API_KEY — waiting for Gemini quota reset (60s)")
+        import time as _time
+        _time.sleep(60)
+        # Réessayer Gemini une fois
+        gemini_analysis = analyze_post_with_gemini(post)
+        if gemini_analysis:
+            return gemini_analysis
+        log.warning("Gemini still unavailable after wait — using keyword fallback analysis")
         return keyword_fallback_analysis(post)
 
     prompt = f"""You are a professional financial analyst specializing in political risk and market impact analysis.
@@ -1056,8 +1083,17 @@ def main():
 ╚══════════════════════════════════════════════════════════╝{Style.RESET_ALL}
 """)
 
+
     # Load previously seen posts (deduplication across restarts)
     state["seen_posts"] = load_seen_posts()
+    first_run = len(state["seen_posts"]) == 0
+    if first_run:
+        # Marquer tous les posts existants comme déjà vus sans analyse
+        posts = fetch_latest_posts(max_posts=50)
+        for post in posts:
+            state["seen_posts"].add(post["id"])
+        save_seen_posts()
+        cprint(f"First run: marked {len(posts)} existing posts as already seen", Fore.YELLOW, "★")
     cprint(f"Loaded {len(state['seen_posts'])} previously seen posts", Fore.CYAN, "📂")
 
     # Connect Alpaca
