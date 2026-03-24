@@ -2,7 +2,10 @@
 
 > AI-powered trading bot that monitors Trump's Truth Social posts 24/7 and automatically executes paper trades based on market impact analysis.
 
+
 **PAPER TRADING ONLY — Educational purposes — Not financial advice.**
+
+Compatible Linux, macOS **et Windows** (voir instructions plus bas).
 
 ---
 
@@ -20,21 +23,39 @@ On April 9, 2025 at 9:37 AM ET, Trump posted **"THIS IS A GREAT TIME TO BUY!!!"*
 
 ---
 
-## Quick Start (3 steps)
 
+## Quick Start (3 étapes)
+
+### Pour Linux/macOS :
 ```bash
-# 1. Clone and configure
+# 1. Cloner et configurer
 git clone https://github.com/erramaline/trump-trade-monitor
 cd trump-trade-monitor
 cp config.example.json config.json
-# Edit config.json with your API keys
+# Modifier config.json avec vos clés API
 
-# 2. Install everything
+# 2. Installer les dépendances
 bash setup.sh
 
-# 3. Run
+# 3. Lancer le bot
 bash run.sh
-# → Opens dashboard at http://localhost:8000
+# → Ouvre le dashboard sur http://localhost:8000
+```
+
+### Pour Windows :
+```bat
+REM 1. Cloner et configurer
+git clone https://github.com/erramaline/trump-trade-monitor
+cd trump-trade-monitor
+copy config.example.json config.json
+REM Modifier config.json avec vos clés API
+
+REM 2. Installer les dépendances
+setup.bat
+
+REM 3. Lancer le bot
+run.bat
+REM → Ouvre le dashboard sur http://localhost:8000
 ```
 
 ---
