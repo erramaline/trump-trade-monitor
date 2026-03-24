@@ -280,24 +280,112 @@ def fetch_latest_posts(max_posts: int = 10) -> list:
 
 
 # ═══════════════════════════════════════════════════════
-#  CLAUDE AI ANALYSIS
+#  AI ANALYSIS
 # ═══════════════════════════════════════════════════════
+
+def load_runtime_config() -> dict:
+    try:
+        if Path("config.json").exists():
+            return json.loads(Path("config.json").read_text())
+    except Exception:
+        pass
+    return {}
+
+
+def get_gemini_api_key() -> str:
+    cfg = load_runtime_config()
+    return (
+        os.environ.get("GEMINI_API_KEY", "")
+        or os.environ.get("GIMINI_API_KEY", "")
+        or cfg.get("gemini_api_key", "")
+    )
+
+
+def get_anthropic_api_key() -> str:
+    cfg = load_runtime_config()
+    return os.environ.get("ANTHROPIC_API_KEY", "") or cfg.get("anthropic_api_key", "")
+
+
+def analyze_post_with_gemini(post: dict) -> dict | None:
+    api_key = get_gemini_api_key()
+    if not api_key:
+        return None
+
+    prompt = f"""You are a professional financial analyst specializing in political risk and market impact analysis.
+
+Analyze this Trump Truth Social post for its potential market impact:
+
+POST: \"{post['content']}\"
+POSTED AT: {post['published']}
+
+Respond ONLY with a JSON object (no markdown, no explanation, just raw JSON):
+
+{{
+  \"impact_score\": <0-100, where 0=no market impact, 100=extreme market-moving event>,
+  \"direction\": \"<BULLISH | BEARISH | NEUTRAL | MIXED>\",
+  \"confidence\": <0-100, how confident are you in this analysis>,
+  \"affected_tickers\": [<list of specific stock tickers directly mentioned or obviously implied, e.g. [\"AAPL\", \"TSLA\"]>],
+  \"affected_sectors\": [<list of sectors affected, e.g. [\"technology\", \"defense\", \"energy\", \"finance\", \"retail\", \"crypto\"]>],
+  \"broad_market\": <true if this affects the whole market (tariffs, Fed, economy), false if company-specific>,
+  \"crypto_impact\": <true if this affects crypto markets>,
+  \"trade_action\": \"<BUY | SELL | HOLD | NONE>\",
+  \"urgency\": \"<IMMEDIATE | WAIT_FOR_OPEN | LOW>\",
+  \"reasoning\": \"<1-2 sentence explanation of the market impact>\",
+  \"post_category\": \"<TARIFF | TRADE_WAR | COMPANY_MENTION | ECONOMY | POLITICAL | CRYPTO | PERSONAL | OTHER>\",
+  \"key_entities\": [<companies, countries, or people mentioned that have market relevance>]
+}}
+
+Scoring guidelines:
+- 90-100: Massive policy announcement (tariff pause, trade deal, rate comment) — April 9 \"GREAT TIME TO BUY\" was 95
+- 70-89: Clear market signal (company threat, sector policy, economic comment)
+- 50-69: Moderate signal (indirect company mention, general economic mood)
+- 30-49: Weak signal (political comment with possible indirect impact)
+- 0-29: No market impact (personal comment, media attacks, personal news)"""
+
+    try:
+        resp = requests.post(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+            params={"key": api_key},
+            json={
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "responseMimeType": "application/json",
+                    "temperature": 0.1,
+                    "maxOutputTokens": 600,
+                },
+            },
+            timeout=20,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        raw_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        raw_text = re.sub(r"```json\s*|\s*```", "", raw_text).strip()
+
+        analysis = json.loads(raw_text)
+        analysis["analyzed_by"] = "gemini"
+        analysis["post_id"] = post["id"]
+        analysis["post_content"] = post["content"][:200]
+        return analysis
+    except json.JSONDecodeError as e:
+        log.warning(f"Gemini returned invalid JSON: {e} — falling back")
+        return None
+    except Exception as e:
+        log.error(f"Gemini API error: {e}")
+        return None
 
 def analyze_post_with_claude(post: dict) -> dict:
     """
-    Send Trump post to Claude for market impact analysis.
+    Analyze a post with Gemini first, then Anthropic, then keyword fallback.
     Returns structured trading signal.
     """
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        try:
-            cfg = json.loads(Path("config.json").read_text())
-            api_key = cfg.get("anthropic_api_key", "")
-        except Exception:
-            pass
+    gemini_analysis = analyze_post_with_gemini(post)
+    if gemini_analysis:
+        return gemini_analysis
+
+    api_key = get_anthropic_api_key()
 
     if not api_key:
-        log.warning("No ANTHROPIC_API_KEY — using keyword fallback analysis")
+        log.warning("No Gemini or ANTHROPIC_API_KEY — using keyword fallback analysis")
         return keyword_fallback_analysis(post)
 
     prompt = f"""You are a professional financial analyst specializing in political risk and market impact analysis.
@@ -945,7 +1033,7 @@ def main():
 {Fore.CYAN}╔══════════════════════════════════════════════════════════╗
 ║   🇺🇸  TRUMP TRUTH SOCIAL MONITOR — AI Trading Bot        ║
 ║   Source:   trumpstruth.org RSS (free, no scraping)      ║
-║   Analysis: Claude AI (Anthropic)                        ║
+║   Analysis: Gemini AI + Claude fallback                  ║
 ║   Broker:   Alpaca Paper Trading                         ║
 ║   {Fore.RED}PAPER TRADING ONLY — Educational use{Fore.CYAN}                   ║
 ╚══════════════════════════════════════════════════════════╝{Style.RESET_ALL}
@@ -958,14 +1046,14 @@ def main():
     # Connect Alpaca
     connect_alpaca()
 
-    # Check for Anthropic API key
-    if os.environ.get("ANTHROPIC_API_KEY") or (
-        Path("config.json").exists() and
-        json.loads(Path("config.json").read_text()).get("anthropic_api_key")
-    ):
+    runtime_cfg = load_runtime_config()
+
+    if get_gemini_api_key():
+        cprint("Gemini AI analysis: ENABLED", Fore.GREEN, "✅")
+    elif os.environ.get("ANTHROPIC_API_KEY") or runtime_cfg.get("anthropic_api_key"):
         cprint("Claude AI analysis: ENABLED", Fore.GREEN, "✅")
     else:
-        cprint("Claude AI not configured — using keyword fallback", Fore.YELLOW, "⚠")
+        cprint("No AI API configured — using keyword fallback", Fore.YELLOW, "⚠")
 
     # Check for Telegram
     if os.environ.get("TELEGRAM_BOT_TOKEN"):

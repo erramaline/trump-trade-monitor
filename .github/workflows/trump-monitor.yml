@@ -33,6 +33,23 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Validate required secrets
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_API_SECRET: ${{ secrets.ALPACA_API_SECRET }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          missing=0
+          for key in ALPACA_API_KEY ALPACA_API_SECRET GEMINI_API_KEY; do
+            if [ -z "${!key}" ]; then
+              echo "Missing required secret: $key"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
       - name: Build config.json from GitHub secrets
         env:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
@@ -59,6 +76,7 @@ jobs:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_API_SECRET: ${{ secrets.ALPACA_API_SECRET }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GIMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           CI_MODE: "true"
         run: |
           timeout 17100 python trump_monitor.py || true
